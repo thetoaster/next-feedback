@@ -31,6 +31,28 @@ import {
   FeedbackType,
 } from "./types";
 
+function getCandidateUrls(path: string): string[] {
+  if (typeof window === "undefined") return [path];
+  if (path.startsWith("http://") || path.startsWith("https://")) return [path];
+
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const urls: string[] = [];
+
+  // Check if current URL is under a subpath (e.g. /pension-planner/admin)
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (segments.length > 0) {
+    const rootPrefix = `/${segments[0]}`;
+    if (!cleanPath.startsWith(rootPrefix)) {
+      urls.push(`${rootPrefix}${cleanPath}`);
+    }
+  }
+
+  // Exact cleanPath
+  urls.push(cleanPath);
+
+  return urls;
+}
+
 export function FeedbackAdmin({
   apiPath = "/api/feedback",
   implementApiPath = "/api/feedback/implement",
@@ -52,27 +74,28 @@ export function FeedbackAdmin({
   const [isTriggering, setIsTriggering] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
 
-  const resolvePath = useCallback((path: string) => {
-    return path;
-  }, []);
-
   const fetchWithFallback = useCallback(async (path: string, options?: RequestInit) => {
-    let res = await fetch(path, options);
-    if (!res.ok && res.status === 404 && typeof window !== "undefined") {
-      const prefix = window.location.pathname.split("/").filter(Boolean)[0];
-      if (prefix && !path.startsWith(`/${prefix}`)) {
-        const fallback = `/${prefix}${path.startsWith("/") ? "" : "/"}${path}`;
-        const retryRes = await fetch(fallback, options);
-        if (retryRes.ok) return retryRes;
+    const candidates = getCandidateUrls(path);
+    let lastError: any = null;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, options);
+        if (res.ok) return res;
+        if (res.status === 404) continue;
+        return res;
+      } catch (err) {
+        lastError = err;
       }
     }
-    return res;
+    if (lastError) throw lastError;
+    return new Response(JSON.stringify({ error: "Endpoint not found" }), { status: 404 });
   }, []);
 
   const fetchFeedback = useCallback(async () => {
+    setLoading(true);
     try {
       const res = await fetchWithFallback(apiPath, { cache: "no-store" });
-      if (res.ok) {
+      if (res && res.ok) {
         const data = await res.json();
         if (Array.isArray(data.items)) {
           setItems(data.items);
@@ -82,6 +105,8 @@ export function FeedbackAdmin({
           });
         }
       }
+    } catch (err) {
+      console.warn("Feedback fetch error:", err);
     } finally {
       setLoading(false);
     }
@@ -152,29 +177,37 @@ export function FeedbackAdmin({
   };
 
   const handleStatusChange = async (id: string, status: FeedbackStatus) => {
-    const res = await fetchWithFallback(apiPath, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id,
-        status,
-        implementedAt: status === "implemented" ? new Date().toISOString() : undefined,
-      }),
-    });
-    if (res.ok) {
-      void fetchFeedback();
+    try {
+      const res = await fetchWithFallback(apiPath, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          status,
+          implementedAt: status === "implemented" ? new Date().toISOString() : undefined,
+        }),
+      });
+      if (res && res.ok) {
+        void fetchFeedback();
+      }
+    } catch (err) {
+      console.warn("Status change error:", err);
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm("Diesen Eintrag wirklich löschen?")) return;
-    const url = `${apiPath}${apiPath.includes("?") ? "&" : "?"}id=${encodeURIComponent(id)}`;
-    const res = await fetchWithFallback(url, {
-      method: "DELETE",
-    });
-    if (res.ok) {
-      if (activeItem?.id === id) setActiveItem(null);
-      void fetchFeedback();
+    try {
+      const url = `${apiPath}${apiPath.includes("?") ? "&" : "?"}id=${encodeURIComponent(id)}`;
+      const res = await fetchWithFallback(url, {
+        method: "DELETE",
+      });
+      if (res && res.ok) {
+        if (activeItem?.id === id) setActiveItem(null);
+        void fetchFeedback();
+      }
+    } catch (err) {
+      console.warn("Delete error:", err);
     }
   };
 
@@ -194,9 +227,11 @@ export function FeedbackAdmin({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (res.ok) {
+      if (res && res.ok) {
         await fetchFeedback();
       }
+    } catch (err) {
+      console.warn("Implementation start error:", err);
     } finally {
       setIsTriggering(false);
     }

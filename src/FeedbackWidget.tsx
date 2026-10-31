@@ -29,6 +29,25 @@ const DEFAULT_TOPIC_OPTIONS = [
   { value: "Allgemeines & Sonstiges", label: "Allgemeines & Sonstiges" },
 ];
 
+function getCandidateUrls(path: string): string[] {
+  if (typeof window === "undefined") return [path];
+  if (path.startsWith("http://") || path.startsWith("https://")) return [path];
+
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const urls: string[] = [];
+
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (segments.length > 0) {
+    const rootPrefix = `/${segments[0]}`;
+    if (!cleanPath.startsWith(rootPrefix)) {
+      urls.push(`${rootPrefix}${cleanPath}`);
+    }
+  }
+
+  urls.push(cleanPath);
+  return urls;
+}
+
 export function FeedbackWidget({
   apiPath = "/api/feedback",
   adminHref = "/admin",
@@ -82,27 +101,24 @@ export function FeedbackWidget({
   }, [isOpen]);
 
   const postFeedback = async (payload: any) => {
-    // Try primary path first
-    let res = await fetch(apiPath, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    // Auto-detect basePath fallback if 404 (e.g. Next.js basePath like /pension-planner)
-    if (!res.ok && res.status === 404 && typeof window !== "undefined") {
-      const pathPrefix = window.location.pathname.split("/").filter(Boolean)[0];
-      if (pathPrefix && !apiPath.startsWith(`/${pathPrefix}`)) {
-        const fallbackPath = `/${pathPrefix}${apiPath.startsWith("/") ? "" : "/"}${apiPath}`;
-        const retryRes = await fetch(fallbackPath, {
+    const candidates = getCandidateUrls(apiPath);
+    let lastError: any = null;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (retryRes.ok) return retryRes;
+        if (res.ok) return res;
+        if (res.status === 404) continue;
+        return res;
+      } catch (err) {
+        lastError = err;
       }
     }
-    return res;
+    if (lastError) throw lastError;
+    return new Response(JSON.stringify({ error: "Endpoint not found" }), { status: 404 });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -154,6 +170,19 @@ export function FeedbackWidget({
       setIsSubmitting(false);
     }
   };
+
+  const resolvedAdminHref = React.useMemo(() => {
+    if (!adminHref) return adminHref;
+    if (typeof window === "undefined") return adminHref;
+    const segments = window.location.pathname.split("/").filter(Boolean);
+    if (segments.length > 0) {
+      const prefix = `/${segments[0]}`;
+      if (!adminHref.startsWith(prefix)) {
+        return `${prefix}${adminHref.startsWith("/") ? "" : "/"}${adminHref}`;
+      }
+    }
+    return adminHref;
+  }, [adminHref]);
 
   const posClasses =
     position === "bottom-left" ? "bottom-5 left-5 items-start" : "bottom-5 right-5 items-end";
@@ -366,9 +395,9 @@ export function FeedbackWidget({
 
                 {/* Submit & Admin Footer */}
                 <div className="pt-1 flex items-center justify-between gap-2">
-                  {adminHref && (
+                  {resolvedAdminHref && (
                     <Link
-                      href={adminHref}
+                      href={resolvedAdminHref}
                       onClick={() => setIsOpen(false)}
                       className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-slate-900 transition-colors"
                     >

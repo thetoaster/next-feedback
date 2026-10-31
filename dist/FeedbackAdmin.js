@@ -1,9 +1,28 @@
 "use client";
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Lightbulb, MessageCircle, Bug, Sparkles, CheckCircle2, Clock, Loader2, Play, Trash2, User, Mail, FolderKanban, Search, Copy, Check, X, Terminal, RefreshCw, } from "lucide-react";
+function getCandidateUrls(path) {
+    if (typeof window === "undefined")
+        return [path];
+    if (path.startsWith("http://") || path.startsWith("https://"))
+        return [path];
+    const cleanPath = path.startsWith("/") ? path : `/${path}`;
+    const urls = [];
+    // Check if current URL is under a subpath (e.g. /pension-planner/admin)
+    const segments = window.location.pathname.split("/").filter(Boolean);
+    if (segments.length > 0) {
+        const rootPrefix = `/${segments[0]}`;
+        if (!cleanPath.startsWith(rootPrefix)) {
+            urls.push(`${rootPrefix}${cleanPath}`);
+        }
+    }
+    // Exact cleanPath
+    urls.push(cleanPath);
+    return urls;
+}
 export function FeedbackAdmin({ apiPath = "/api/feedback", implementApiPath = "/api/feedback/implement", backHref = "/", backLabel = "Zurück zur App", title = "Feedback & Produkt-Verbesserungen", subtitle = "Alle gesammelten Ideen, Rückmeldungen & Fehlerberichte gruppiert nach Thema", }) {
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -16,26 +35,31 @@ export function FeedbackAdmin({ apiPath = "/api/feedback", implementApiPath = "/
     const [selectedAgent, setSelectedAgent] = useState("claude");
     const [isTriggering, setIsTriggering] = useState(false);
     const [copiedPrompt, setCopiedPrompt] = useState(false);
-    const resolvePath = useCallback((path) => {
-        return path;
-    }, []);
     const fetchWithFallback = useCallback(async (path, options) => {
-        let res = await fetch(path, options);
-        if (!res.ok && res.status === 404 && typeof window !== "undefined") {
-            const prefix = window.location.pathname.split("/").filter(Boolean)[0];
-            if (prefix && !path.startsWith(`/${prefix}`)) {
-                const fallback = `/${prefix}${path.startsWith("/") ? "" : "/"}${path}`;
-                const retryRes = await fetch(fallback, options);
-                if (retryRes.ok)
-                    return retryRes;
+        const candidates = getCandidateUrls(path);
+        let lastError = null;
+        for (const url of candidates) {
+            try {
+                const res = await fetch(url, options);
+                if (res.ok)
+                    return res;
+                if (res.status === 404)
+                    continue;
+                return res;
+            }
+            catch (err) {
+                lastError = err;
             }
         }
-        return res;
+        if (lastError)
+            throw lastError;
+        return new Response(JSON.stringify({ error: "Endpoint not found" }), { status: 404 });
     }, []);
     const fetchFeedback = useCallback(async () => {
+        setLoading(true);
         try {
             const res = await fetchWithFallback(apiPath, { cache: "no-store" });
-            if (res.ok) {
+            if (res && res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data.items)) {
                     setItems(data.items);
@@ -46,6 +70,9 @@ export function FeedbackAdmin({ apiPath = "/api/feedback", implementApiPath = "/
                     });
                 }
             }
+        }
+        catch (err) {
+            console.warn("Feedback fetch error:", err);
         }
         finally {
             setLoading(false);
@@ -110,30 +137,40 @@ export function FeedbackAdmin({ apiPath = "/api/feedback", implementApiPath = "/
         setSelectedAgent(item.agentUsed || "claude");
     };
     const handleStatusChange = async (id, status) => {
-        const res = await fetchWithFallback(apiPath, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                id,
-                status,
-                implementedAt: status === "implemented" ? new Date().toISOString() : undefined,
-            }),
-        });
-        if (res.ok) {
-            void fetchFeedback();
+        try {
+            const res = await fetchWithFallback(apiPath, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    id,
+                    status,
+                    implementedAt: status === "implemented" ? new Date().toISOString() : undefined,
+                }),
+            });
+            if (res && res.ok) {
+                void fetchFeedback();
+            }
+        }
+        catch (err) {
+            console.warn("Status change error:", err);
         }
     };
     const handleDelete = async (id) => {
         if (!confirm("Diesen Eintrag wirklich löschen?"))
             return;
-        const url = `${apiPath}${apiPath.includes("?") ? "&" : "?"}id=${encodeURIComponent(id)}`;
-        const res = await fetchWithFallback(url, {
-            method: "DELETE",
-        });
-        if (res.ok) {
-            if (activeItem?.id === id)
-                setActiveItem(null);
-            void fetchFeedback();
+        try {
+            const url = `${apiPath}${apiPath.includes("?") ? "&" : "?"}id=${encodeURIComponent(id)}`;
+            const res = await fetchWithFallback(url, {
+                method: "DELETE",
+            });
+            if (res && res.ok) {
+                if (activeItem?.id === id)
+                    setActiveItem(null);
+                void fetchFeedback();
+            }
+        }
+        catch (err) {
+            console.warn("Delete error:", err);
         }
     };
     const handleStartImplementation = async (e) => {
@@ -152,9 +189,12 @@ export function FeedbackAdmin({ apiPath = "/api/feedback", implementApiPath = "/
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
-            if (res.ok) {
+            if (res && res.ok) {
                 await fetchFeedback();
             }
+        }
+        catch (err) {
+            console.warn("Implementation start error:", err);
         }
         finally {
             setIsTriggering(false);
