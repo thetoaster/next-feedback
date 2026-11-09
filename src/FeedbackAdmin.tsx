@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
@@ -61,7 +61,28 @@ export function FeedbackAdmin({
   title = "Feedback & Produkt-Verbesserungen",
   subtitle = "Alle gesammelten Ideen, Rückmeldungen & Fehlerberichte gruppiert nach Thema",
 }: FeedbackAdminProps) {
+  const pathname = usePathname();
   const [items, setItems] = useState<FeedbackItem[]>([]);
+  const [resolvedBackHref, setResolvedBackHref] = useState(backHref);
+
+  useEffect(() => {
+    if (!backHref || typeof window === "undefined") return;
+    const cleanBack = backHref.startsWith("/") ? backHref : `/${backHref}`;
+    const fullPath = window.location.pathname.replace(/\/$/, "");
+    const routePath = pathname && pathname !== "/" ? pathname.replace(/\/$/, "") : "";
+    const basePath =
+      routePath && fullPath.endsWith(routePath)
+        ? fullPath.slice(0, fullPath.length - routePath.length)
+        : !routePath && fullPath && fullPath !== "/"
+        ? fullPath
+        : "";
+
+    if (basePath && !cleanBack.startsWith(`${basePath}/`) && cleanBack !== basePath) {
+      setResolvedBackHref(cleanBack === "/" ? basePath : `${basePath}${cleanBack}`);
+    } else {
+      setResolvedBackHref(cleanBack);
+    }
+  }, [backHref, pathname]);
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState<"all" | FeedbackType>("all");
   const [filterStatus, setFilterStatus] = useState<"all" | FeedbackStatus>("all");
@@ -312,14 +333,14 @@ export function FeedbackAdmin({
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
         <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            {backHref && (
-              <Link
-                href={backHref}
+            {resolvedBackHref && (
+              <a
+                href={resolvedBackHref}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors"
               >
                 <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{backLabel}</span>
-              </Link>
+              </a>
             )}
             <div className="h-5 w-px bg-slate-200 hidden sm:block" />
             <div>

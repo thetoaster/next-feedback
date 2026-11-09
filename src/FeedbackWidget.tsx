@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -173,16 +172,23 @@ export function FeedbackWidget({
 
   const resolvedAdminHref = React.useMemo(() => {
     if (!adminHref) return adminHref;
-    if (typeof window === "undefined") return adminHref;
-    const segments = window.location.pathname.split("/").filter(Boolean);
-    if (segments.length > 0) {
-      const prefix = `/${segments[0]}`;
-      if (!adminHref.startsWith(prefix)) {
-        return `${prefix}${adminHref.startsWith("/") ? "" : "/"}${adminHref}`;
-      }
+    const cleanAdmin = adminHref.startsWith("/") ? adminHref : `/${adminHref}`;
+    if (typeof window === "undefined") return cleanAdmin;
+
+    const fullPath = window.location.pathname.replace(/\/$/, "");
+    const routePath = pathname && pathname !== "/" ? pathname.replace(/\/$/, "") : "";
+    const basePath =
+      routePath && fullPath.endsWith(routePath)
+        ? fullPath.slice(0, fullPath.length - routePath.length)
+        : !routePath && fullPath && fullPath !== "/"
+        ? fullPath
+        : "";
+
+    if (basePath && !cleanAdmin.startsWith(`${basePath}/`) && cleanAdmin !== basePath) {
+      return `${basePath}${cleanAdmin}`;
     }
-    return adminHref;
-  }, [adminHref]);
+    return cleanAdmin;
+  }, [adminHref, pathname, isOpen]);
 
   const posClasses =
     position === "bottom-left" ? "bottom-5 left-5 items-start" : "bottom-5 right-5 items-end";
@@ -396,14 +402,14 @@ export function FeedbackWidget({
                 {/* Submit & Admin Footer */}
                 <div className="pt-1 flex items-center justify-between gap-2">
                   {resolvedAdminHref && (
-                    <Link
+                    <a
                       href={resolvedAdminHref}
                       onClick={() => setIsOpen(false)}
                       className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-slate-900 transition-colors"
                     >
                       <LayoutList className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Dashboard ({adminHref})</span>
-                    </Link>
+                      <span>Dashboard ({resolvedAdminHref})</span>
+                    </a>
                   )}
 
                   <button
