@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { spawn } from "child_process";
 import fs from "fs";
+import path from "path";
 import { createFeedbackStore } from "./store";
 export * from "./types";
 export * from "./store";
@@ -194,11 +195,69 @@ export function createImplementRoute(options) {
                 child.on("close", async (code) => {
                     const timestamp = new Date().toISOString();
                     if (code === 0) {
-                        accumulatedLog += `\n[${new Date().toLocaleTimeString()}] Implementation completed successfully (exit code 0).`;
+                        const isProd = process.env.NODE_ENV === "production";
+                        if (!isProd) {
+                            accumulatedLog += `\n[${new Date().toLocaleTimeString()}] Implementation completed successfully (exit code 0).`;
+                            await store.update(id, {
+                                status: "implemented",
+                                implementedAt: timestamp,
+                                implementationLog: accumulatedLog.slice(-15000),
+                            });
+                            return;
+                        }
+                        // In production mode: build production bundle and restart via localhost-control
+                        accumulatedLog += `\n[${new Date().toLocaleTimeString()}] Code changes complete. Running production build (npm run build)...\n`;
                         await store.update(id, {
-                            status: "implemented",
-                            implementedAt: timestamp,
                             implementationLog: accumulatedLog.slice(-15000),
+                        });
+                        const buildChild = spawn("npm", ["run", "build"], {
+                            cwd: workspaceDir,
+                            env: {
+                                ...process.env,
+                                NODE_ENV: "production",
+                                PATH: `/usr/local/opt/node/bin:${process.env.HOME || ""}/.local/bin:/usr/local/bin:/opt/homebrew/bin:${process.env.PATH || "/usr/bin:/bin"}`,
+                            },
+                            stdio: ["ignore", "pipe", "pipe"],
+                        });
+                        buildChild.stdout?.on("data", (chunk) => {
+                            void appendChunk(chunk);
+                        });
+                        buildChild.stderr?.on("data", (chunk) => {
+                            void appendChunk(chunk);
+                        });
+                        buildChild.on("close", async (buildCode) => {
+                            const doneTs = new Date().toISOString();
+                            if (buildCode === 0) {
+                                accumulatedLog += `\n[${new Date().toLocaleTimeString()}] Production build succeeded. Restarting server via localhost-control...`;
+                                await store.update(id, {
+                                    status: "implemented",
+                                    implementedAt: doneTs,
+                                    implementationLog: accumulatedLog.slice(-15000),
+                                });
+                                const folderName = path.basename(workspaceDir);
+                                const portNum = Number(process.env.PORT) || 0;
+                                try {
+                                    await fetch("http://localhost/api/action", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                            action: "restart",
+                                            folder: folderName,
+                                            port: portNum,
+                                        }),
+                                    });
+                                }
+                                catch {
+                                    // Fallback if localhost-control is unreachable
+                                }
+                            }
+                            else {
+                                accumulatedLog += `\n[${new Date().toLocaleTimeString()}] Production build failed with exit code ${buildCode}.`;
+                                await store.update(id, {
+                                    status: "open",
+                                    implementationLog: accumulatedLog.slice(-15000),
+                                });
+                            }
                         });
                     }
                     else {
